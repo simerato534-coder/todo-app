@@ -231,12 +231,45 @@
 
     .todo-item {
       background: var(--card); border-radius: 10px; padding: 12px 14px;
-      box-shadow: var(--shadow); display: flex; align-items: center; gap: 10px;
+      box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 0;
       animation: fadeIn 0.22s ease;
       transition: background-color 0.3s ease, box-shadow 0.3s ease;
     }
     .todo-item.removing { animation: fadeOut 0.22s ease forwards; pointer-events: none; }
     .todo-item.done { opacity: 0.52; }
+    .todo-row { display: flex; align-items: center; gap: 10px; }
+
+    /* ── 메모 ── */
+    .memo-btn {
+      flex-shrink: 0; background: none;
+      border: 1.5px solid var(--border); border-radius: 6px;
+      color: var(--text-muted); font-size: 0.72rem; font-weight: 600;
+      padding: 3px 9px; cursor: pointer; white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .memo-btn:hover    { border-color: var(--work); color: var(--work); }
+    .memo-btn.has-memo { border-color: var(--work); color: var(--work); }
+    .memo-btn.memo-open { background: var(--work); border-color: var(--work); color: #fff; }
+    .memo-panel {
+      display: none; gap: 6px; align-items: flex-start;
+      margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);
+    }
+    .memo-panel.open { display: flex; }
+    .memo-textarea {
+      flex: 1; resize: none; min-height: 72px; padding: 8px 10px;
+      border: 1.5px solid var(--border); border-radius: 8px;
+      font-size: 0.88rem; font-family: inherit; line-height: 1.5;
+      background: var(--input-bg); color: var(--text); outline: none;
+      transition: border-color 0.15s, background-color 0.3s ease;
+    }
+    .memo-textarea:focus { border-color: var(--work); }
+    .memo-textarea::placeholder { color: var(--text-muted); }
+    .memo-close-btn {
+      flex-shrink: 0; background: none; border: none; color: var(--text-muted);
+      font-size: 1.1rem; cursor: pointer; padding: 2px 4px;
+      border-radius: 4px; line-height: 1; transition: color 0.15s;
+    }
+    .memo-close-btn:hover { color: var(--delete-color); }
 
     .todo-check {
       flex-shrink: 0; width: 22px; height: 22px;
@@ -419,6 +452,8 @@
   let currentCat   = 'all';
   let searchQuery  = '';
   let isEditing    = false;
+  let openMemoId   = null;
+  let memoSaveTimer = null;
 
   const CAT_LABEL     = { work: '업무', personal: '개인', study: '공부' };
   const DEFAULT_GROUP = { id: 'default', name: '기본' };
@@ -624,17 +659,24 @@
       li.className = 'todo-item' + (todo.done ? ' done' : '');
       li.dataset.id = todo.id;
       li.innerHTML = `
-        <div class="todo-check" data-id="${todo.id}" title="완료 토글">
-          <svg width="13" height="10" viewBox="0 0 13 10" fill="none">
-            <path d="M1 5L5 9L12 1" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
+        <div class="todo-row">
+          <div class="todo-check" data-id="${todo.id}" title="완료 토글">
+            <svg width="13" height="10" viewBox="0 0 13 10" fill="none">
+              <path d="M1 5L5 9L12 1" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <span class="cat-badge ${todo.category}">${CAT_LABEL[todo.category]}</span>
+          <div class="todo-content">
+            <span class="todo-text" data-id="${todo.id}" title="더블클릭으로 수정">${escapeHtml(todo.text)}</span>
+            <span class="todo-time">${timeAgo(todo.createdAt)}</span>
+          </div>
+          <button class="memo-btn${todo.memo ? ' has-memo' : ''}${todo.id === openMemoId ? ' memo-open' : ''}" data-id="${todo.id}">메모</button>
+          <button class="todo-delete" data-id="${todo.id}" title="삭제">×</button>
         </div>
-        <span class="cat-badge ${todo.category}">${CAT_LABEL[todo.category]}</span>
-        <div class="todo-content">
-          <span class="todo-text" data-id="${todo.id}" title="더블클릭으로 수정">${escapeHtml(todo.text)}</span>
-          <span class="todo-time">${timeAgo(todo.createdAt)}</span>
+        <div class="memo-panel${todo.id === openMemoId ? ' open' : ''}">
+          <textarea class="memo-textarea" data-id="${todo.id}" placeholder="메모를 입력하세요...">${escapeHtml(todo.memo || '')}</textarea>
+          <button class="memo-close-btn" data-id="${todo.id}" title="닫기">×</button>
         </div>
-        <button class="todo-delete" data-id="${todo.id}" title="삭제">×</button>
       `;
       ul.appendChild(li);
     });
@@ -682,6 +724,20 @@
     batch.commit();
   });
 
+  // ── 메모 저장 헬퍼 ───────────────────────────────────
+  function closeMemo(li) {
+    const id      = li.dataset.id;
+    const panel   = li.querySelector('.memo-panel');
+    const textarea = panel.querySelector('.memo-textarea');
+    clearTimeout(memoSaveTimer);
+    updateDoc(doc(db, 'todos', id), { memo: textarea.value });
+    panel.classList.remove('open');
+    li.querySelector('.memo-btn')?.classList.remove('memo-open', 'has-memo');
+    if (textarea.value) li.querySelector('.memo-btn')?.classList.add('has-memo');
+    openMemoId = null;
+    isEditing  = false;
+  }
+
   // ── 목록 이벤트 위임 ─────────────────────────────────
   document.getElementById('todo-list').addEventListener('click', e => {
     const check = e.target.closest('.todo-check');
@@ -690,6 +746,37 @@
       if (todo) updateDoc(doc(db, 'todos', todo.id), { done: !todo.done });
       return;
     }
+
+    const memoBtn = e.target.closest('.memo-btn');
+    if (memoBtn) {
+      const id    = memoBtn.dataset.id;
+      const li    = memoBtn.closest('.todo-item');
+      const panel = li.querySelector('.memo-panel');
+      const isOpen = panel.classList.contains('open');
+
+      // 다른 열린 메모 닫기
+      document.querySelectorAll('.todo-item').forEach(item => {
+        if (item !== li && item.querySelector('.memo-panel.open')) closeMemo(item);
+      });
+
+      if (isOpen) {
+        closeMemo(li);
+      } else {
+        panel.classList.add('open');
+        memoBtn.classList.add('memo-open');
+        openMemoId = id;
+        isEditing  = true;
+        panel.querySelector('.memo-textarea').focus();
+      }
+      return;
+    }
+
+    const memoClose = e.target.closest('.memo-close-btn');
+    if (memoClose) {
+      closeMemo(memoClose.closest('.todo-item'));
+      return;
+    }
+
     const del = e.target.closest('.todo-delete');
     if (del) {
       const id = del.dataset.id;
@@ -700,6 +787,20 @@
         deleteDoc(doc(db, 'todos', id));
       }, { once: true });
     }
+  });
+
+  // 메모 자동 저장 (600ms 디바운스)
+  document.getElementById('todo-list').addEventListener('input', e => {
+    const textarea = e.target.closest('.memo-textarea');
+    if (!textarea) return;
+    const id = textarea.closest('.todo-item').dataset.id;
+    clearTimeout(memoSaveTimer);
+    memoSaveTimer = setTimeout(() => {
+      updateDoc(doc(db, 'todos', id), { memo: textarea.value });
+      // 메모 있으면 버튼 색상 유지
+      const btn = document.querySelector(`.todo-item[data-id="${id}"] .memo-btn`);
+      if (btn) btn.classList.toggle('has-memo', textarea.value.length > 0);
+    }, 600);
   });
 
   // ── 더블클릭 인라인 편집 ─────────────────────────────
