@@ -271,6 +271,55 @@
     }
     .memo-close-btn:hover { color: var(--delete-color); }
 
+    /* ── 휴지통 ── */
+    .trash-toggle-btn {
+      font-size: 0.8rem; color: var(--text-sub);
+      background: none; border: 1.5px solid var(--border);
+      border-radius: 6px; padding: 4px 10px; cursor: pointer; transition: all 0.15s;
+    }
+    .trash-toggle-btn.has-items { border-color: var(--personal); color: var(--personal); }
+    .trash-toggle-btn.open { background: var(--personal); border-color: var(--personal); color: #fff; }
+    .trash-panel {
+      background: var(--card); border-radius: 14px; margin-bottom: 12px;
+      box-shadow: var(--shadow); border: 1.5px solid var(--personal);
+      overflow: hidden; transition: background-color 0.3s ease;
+    }
+    .trash-panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+    }
+    .trash-panel-title { font-size: 0.9rem; font-weight: 700; color: var(--personal); }
+    .trash-empty-all-btn {
+      font-size: 0.75rem; color: var(--delete-color); background: none;
+      border: 1px solid var(--delete-color); border-radius: 5px;
+      padding: 3px 8px; cursor: pointer; transition: all 0.15s;
+    }
+    .trash-empty-all-btn:hover { background: var(--delete-color); color: #fff; }
+    .trash-list { list-style: none; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+    .trash-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px; background: var(--bg); border-radius: 8px;
+      transition: background-color 0.3s ease;
+    }
+    .trash-item-text {
+      flex: 1; font-size: 0.88rem; color: var(--text-sub); text-decoration: line-through;
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .trash-item-time { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+    .restore-btn {
+      flex-shrink: 0; background: none; border: 1.5px solid var(--done-color);
+      color: var(--done-color); border-radius: 6px; font-size: 0.72rem; font-weight: 600;
+      padding: 2px 8px; cursor: pointer; white-space: nowrap; transition: all 0.15s;
+    }
+    .restore-btn:hover { background: var(--done-color); color: #fff; }
+    .perm-del-btn {
+      flex-shrink: 0; background: none; border: none; color: var(--border);
+      font-size: 1.1rem; cursor: pointer; padding: 2px 4px;
+      border-radius: 4px; line-height: 1; transition: color 0.15s;
+    }
+    .perm-del-btn:hover { color: var(--delete-color); }
+    .trash-empty-msg { text-align: center; padding: 20px; color: var(--text-sub); font-size: 0.88rem; }
+
     .todo-check {
       flex-shrink: 0; width: 22px; height: 22px;
       border: 2px solid var(--border); border-radius: 6px;
@@ -409,8 +458,14 @@
   <!-- 액션 바 -->
   <div class="actions-bar">
     <span class="remaining-count" id="remaining-count">남은 할 일 <strong>0</strong>개</span>
-    <button id="clear-btn" class="clear-btn" disabled>완료 항목 삭제</button>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button id="trash-btn" class="trash-toggle-btn">🗑️ <span id="trash-badge">0</span></button>
+      <button id="clear-btn" class="clear-btn" disabled>완료 항목 삭제</button>
+    </div>
   </div>
+
+  <!-- 휴지통 패널 -->
+  <div id="trash-panel" class="trash-panel" style="display:none"></div>
 
   <!-- 목록 -->
   <ul class="todo-list" id="todo-list"></ul>
@@ -452,8 +507,9 @@
   let currentCat   = 'all';
   let searchQuery  = '';
   let isEditing    = false;
-  let openMemoId   = null;
+  let openMemoId    = null;
   let memoSaveTimer = null;
+  let showTrash     = false;
 
   const CAT_LABEL     = { work: '업무', personal: '개인', study: '공부' };
   const DEFAULT_GROUP = { id: 'default', name: '기본' };
@@ -509,11 +565,13 @@
 
   // ── 렌더링 ───────────────────────────────────────────
   function renderAll() {
+    cleanupTrash();
     renderGroups();
     renderDashboard();
     renderTabs();
     renderActions();
     renderList();
+    renderTrash();
   }
 
   /* 그룹 바 */
@@ -589,7 +647,7 @@
   /* 대시보드 */
   function renderDashboard() {
     const todayStr = new Date().toDateString();
-    const scope    = todos.filter(t => t.groupId === currentGroup);
+    const scope    = todos.filter(t => t.groupId === currentGroup && !t.deletedAt);
     const todayN   = scope.filter(t => t.createdAt && new Date(t.createdAt).toDateString() === todayStr).length;
     const total    = scope.length;
     const done     = scope.filter(t => t.done).length;
@@ -610,7 +668,7 @@
   /* 탭 뱃지 */
   function renderTabs() {
     const q     = searchQuery.trim().toLowerCase();
-    const scope = todos.filter(t => t.groupId === currentGroup && (!q || t.text.toLowerCase().includes(q)));
+    const scope = todos.filter(t => t.groupId === currentGroup && !t.deletedAt && (!q || t.text.toLowerCase().includes(q)));
     const counts = { all:0, work:0, personal:0, study:0 };
     scope.forEach(t => { if (!t.done) { counts.all++; counts[t.category]++; } });
     document.getElementById('badge-all').textContent      = counts.all;
@@ -621,7 +679,7 @@
 
   /* 액션 바 */
   function renderActions() {
-    const scope     = todos.filter(t => t.groupId === currentGroup);
+    const scope     = todos.filter(t => t.groupId === currentGroup && !t.deletedAt);
     const remaining = scope.filter(t => !t.done).length;
     const completed = scope.filter(t => t.done).length;
     document.getElementById('remaining-count').innerHTML = `남은 할 일 <strong>${remaining}</strong>개`;
@@ -633,7 +691,7 @@
   /* 목록 */
   function getFiltered() {
     const q = searchQuery.trim().toLowerCase();
-    let list = todos.filter(t => t.groupId === currentGroup);
+    let list = todos.filter(t => t.groupId === currentGroup && !t.deletedAt);
     if (currentCat !== 'all') list = list.filter(t => t.category === currentCat);
     if (q) list = list.filter(t => t.text.toLowerCase().includes(q));
     list.sort((a, b) => a.done - b.done);
@@ -714,14 +772,97 @@
     renderList();
   });
 
-  // 완료 항목 삭제
+  // 완료 항목 → 휴지통
   document.getElementById('clear-btn').addEventListener('click', () => {
-    const completed = todos.filter(t => t.groupId === currentGroup && t.done);
+    const completed = todos.filter(t => t.groupId === currentGroup && t.done && !t.deletedAt);
     if (!completed.length) return;
-    if (!confirm(`완료된 항목 ${completed.length}개를 모두 삭제할까요?`)) return;
+    if (!confirm(`완료된 항목 ${completed.length}개를 휴지통으로 이동할까요?`)) return;
+    const now = new Date().toISOString();
     const batch = writeBatch(db);
-    completed.forEach(t => batch.delete(doc(db, 'todos', t.id)));
+    completed.forEach(t => batch.update(doc(db, 'todos', t.id), { deletedAt: now }));
     batch.commit();
+  });
+
+  // ── 휴지통 ───────────────────────────────────────────
+  function cleanupTrash() {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    todos
+      .filter(t => t.deletedAt && t.deletedAt < cutoff)
+      .forEach(t => deleteDoc(doc(db, 'todos', t.id)));
+  }
+
+  function trashTimeLabel(deletedAt) {
+    const remaining = 24 * 60 * 60 * 1000 - (Date.now() - new Date(deletedAt).getTime());
+    const h = Math.floor(remaining / 3600000);
+    const m = Math.floor((remaining % 3600000) / 60000);
+    if (h > 0) return `${h}시간 후 삭제`;
+    if (m > 0) return `${m}분 후 삭제`;
+    return '곧 삭제';
+  }
+
+  function renderTrash() {
+    const trashed = todos.filter(t => t.deletedAt).sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
+    const badge   = document.getElementById('trash-badge');
+    const btn     = document.getElementById('trash-btn');
+    const panel   = document.getElementById('trash-panel');
+
+    badge.textContent = trashed.length;
+    btn.classList.toggle('has-items', trashed.length > 0);
+    btn.classList.toggle('open', showTrash);
+
+    if (!showTrash) { panel.style.display = 'none'; return; }
+    panel.style.display = 'block';
+
+    if (trashed.length === 0) {
+      panel.innerHTML = '<p class="trash-empty-msg">🗑️ 휴지통이 비어있습니다</p>';
+      return;
+    }
+
+    panel.innerHTML = `
+      <div class="trash-panel-header">
+        <span class="trash-panel-title">🗑️ 휴지통 (${trashed.length}개 · 24시간 후 자동 삭제)</span>
+        <button class="trash-empty-all-btn">전체 영구삭제</button>
+      </div>
+      <ul class="trash-list"></ul>
+    `;
+
+    const list = panel.querySelector('.trash-list');
+    trashed.forEach(todo => {
+      const li = document.createElement('li');
+      li.className = 'trash-item';
+      li.innerHTML = `
+        <button class="restore-btn" data-id="${todo.id}">↩ 복구</button>
+        <span class="cat-badge ${todo.category}">${CAT_LABEL[todo.category]}</span>
+        <span class="trash-item-text">${escapeHtml(todo.text)}</span>
+        <span class="trash-item-time">${trashTimeLabel(todo.deletedAt)}</span>
+        <button class="perm-del-btn" data-id="${todo.id}" title="영구삭제">×</button>
+      `;
+      list.appendChild(li);
+    });
+
+    panel.querySelector('.trash-empty-all-btn').addEventListener('click', () => {
+      if (!confirm(`휴지통의 ${trashed.length}개 항목을 모두 영구 삭제할까요?`)) return;
+      const batch = writeBatch(db);
+      trashed.forEach(t => batch.delete(doc(db, 'todos', t.id)));
+      batch.commit();
+    });
+
+    panel.querySelectorAll('.restore-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        updateDoc(doc(db, 'todos', btn.dataset.id), { deletedAt: null });
+      });
+    });
+
+    panel.querySelectorAll('.perm-del-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        deleteDoc(doc(db, 'todos', btn.dataset.id));
+      });
+    });
+  }
+
+  document.getElementById('trash-btn').addEventListener('click', () => {
+    showTrash = !showTrash;
+    renderTrash();
   });
 
   // ── 메모 저장 헬퍼 ───────────────────────────────────
@@ -784,7 +925,7 @@
       if (!li) return;
       li.classList.add('removing');
       li.addEventListener('animationend', () => {
-        deleteDoc(doc(db, 'todos', id));
+        updateDoc(doc(db, 'todos', id), { deletedAt: new Date().toISOString() });
       }, { once: true });
     }
   });
