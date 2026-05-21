@@ -320,6 +320,35 @@
     .perm-del-btn:hover { color: var(--delete-color); }
     .trash-empty-msg { text-align: center; padding: 20px; color: var(--text-sub); font-size: 0.88rem; }
 
+    /* ── 정렬 바 ── */
+    .sort-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    .sort-label { font-size: 0.75rem; color: var(--text-sub); white-space: nowrap; }
+    .sort-btns { display: flex; gap: 4px; flex-wrap: wrap; }
+    .sort-btn {
+      padding: 4px 10px; border: 1.5px solid var(--border); border-radius: 99px;
+      background: var(--card); font-size: 0.75rem; cursor: pointer;
+      color: var(--text-sub); transition: all 0.15s; white-space: nowrap;
+    }
+    .sort-btn:hover  { border-color: var(--work); color: var(--work); }
+    .sort-btn.active { background: var(--work); border-color: var(--work); color: #fff; font-weight: 600; }
+
+    /* ── 데이터 내보내기/가져오기 ── */
+    .data-bar { display: flex; gap: 8px; justify-content: center; margin-top: 16px; }
+    .data-btn {
+      font-size: 0.8rem; padding: 6px 14px; border: 1.5px solid var(--border); border-radius: 8px;
+      background: var(--card); color: var(--text-sub); cursor: pointer; transition: all 0.15s;
+    }
+    .data-btn:hover { border-color: var(--work); color: var(--work); }
+
+    /* ── 드래그 앤 드롭 ── */
+    .sortable-ghost { opacity: 0.3; }
+    .sort-handle {
+      display: none; cursor: grab; color: var(--text-muted); font-size: 1rem;
+      padding: 2px 2px; flex-shrink: 0; user-select: none;
+    }
+    .sort-handle:active { cursor: grabbing; }
+    .todo-list.manual-sort .sort-handle { display: block; }
+
     .todo-check {
       flex-shrink: 0; width: 22px; height: 22px;
       border: 2px solid var(--border); border-radius: 6px;
@@ -453,6 +482,16 @@
       <button class="tab-btn" data-cat="personal">🏠 개인 <span class="badge" id="badge-personal">0</span></button>
       <button class="tab-btn" data-cat="study">📚 공부 <span class="badge" id="badge-study">0</span></button>
     </div>
+    <div class="sort-bar">
+      <span class="sort-label">정렬</span>
+      <div class="sort-btns" id="sort-btns">
+        <button class="sort-btn active" data-sort="createdAt-desc">최신순</button>
+        <button class="sort-btn" data-sort="createdAt-asc">오래된순</button>
+        <button class="sort-btn" data-sort="category">카테고리</button>
+        <button class="sort-btn" data-sort="done">완료순</button>
+        <button class="sort-btn" data-sort="manual">⠿ 수동</button>
+      </div>
+    </div>
   </div>
 
   <!-- 액션 바 -->
@@ -470,6 +509,12 @@
   <!-- 목록 -->
   <ul class="todo-list" id="todo-list"></ul>
 
+  <div class="data-bar">
+    <button id="export-btn" class="data-btn">📤 JSON 내보내기</button>
+    <label class="data-btn" for="import-file">📥 JSON 가져오기</label>
+    <input type="file" id="import-file" accept=".json" style="display:none">
+  </div>
+
   <p class="shortcut-hint">
     <kbd>Alt+N</kbd> 새 할 일 &nbsp;|&nbsp;
     <kbd>Alt+1~4</kbd> 카테고리 전환 &nbsp;|&nbsp;
@@ -477,6 +522,7 @@
   </p>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 <script type="module">
   import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
   import {
@@ -510,6 +556,18 @@
   let openMemoId    = null;
   let memoSaveTimer = null;
   let showTrash     = false;
+  let renderTimer   = null;
+  let sortableInst  = null;
+
+  const SORT_KEY  = 'todo-app-sort';
+  const ORDER_KEY = 'todo-app-order';
+  let currentSort = localStorage.getItem(SORT_KEY) || 'createdAt-desc';
+  let manualOrder = JSON.parse(localStorage.getItem(ORDER_KEY) || '[]');
+
+  // 정렬 버튼 초기 상태
+  document.querySelectorAll('.sort-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.sort === currentSort)
+  );
 
   const CAT_LABEL     = { work: '업무', personal: '개인', study: '공부' };
   const DEFAULT_GROUP = { id: 'default', name: '기본' };
@@ -548,22 +606,26 @@
   function initListeners() {
     onSnapshot(todosCol, snap => {
       todos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      if (!isEditing) renderAll();
+      if (!isEditing) scheduleRender();
     });
     onSnapshot(groupsCol, snap => {
       const loaded = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      // 기본 그룹이 없으면 생성
       if (!loaded.find(g => g.id === 'default'))
         setDoc(doc(db, 'groups', 'default'), { name: '기본', createdAt: '0' });
       groups = [
         ...loaded.filter(g => g.id === 'default'),
         ...loaded.filter(g => g.id !== 'default').sort((a,b) => (a.createdAt||'').localeCompare(b.createdAt||''))
       ];
-      if (!isEditing) renderAll();
+      if (!isEditing) scheduleRender();
     });
   }
 
   // ── 렌더링 ───────────────────────────────────────────
+  function scheduleRender() {
+    clearTimeout(renderTimer);
+    renderTimer = setTimeout(renderAll, 60);
+  }
+
   function renderAll() {
     cleanupTrash();
     renderGroups();
@@ -694,7 +756,34 @@
     let list = todos.filter(t => t.groupId === currentGroup && !t.deletedAt);
     if (currentCat !== 'all') list = list.filter(t => t.category === currentCat);
     if (q) list = list.filter(t => t.text.toLowerCase().includes(q));
-    list.sort((a, b) => a.done - b.done);
+
+    const CAT_ORDER = { work: 0, personal: 1, study: 2 };
+    switch (currentSort) {
+      case 'createdAt-asc':
+        list.sort((a, b) => (a.createdAt||'').localeCompare(b.createdAt||''));
+        list.sort((a, b) => a.done - b.done);
+        break;
+      case 'category':
+        list.sort((a, b) => (CAT_ORDER[a.category]||0) - (CAT_ORDER[b.category]||0));
+        list.sort((a, b) => a.done - b.done);
+        break;
+      case 'done':
+        list.sort((a, b) => a.done - b.done ||
+          (b.createdAt||'').localeCompare(a.createdAt||''));
+        break;
+      case 'manual':
+        list.sort((a, b) => {
+          const ai = manualOrder.indexOf(a.id), bi = manualOrder.indexOf(b.id);
+          if (ai === -1 && bi === -1) return (b.createdAt||'').localeCompare(a.createdAt||'');
+          if (ai === -1) return 1;
+          if (bi === -1) return -1;
+          return ai - bi;
+        });
+        break;
+      default: // createdAt-desc
+        list.sort((a, b) => (b.createdAt||'').localeCompare(a.createdAt||''));
+        list.sort((a, b) => a.done - b.done);
+    }
     return list;
   }
 
@@ -711,13 +800,14 @@
       return;
     }
 
-    ul.innerHTML = '';
+    const frag = document.createDocumentFragment();
     filtered.forEach(todo => {
       const li = document.createElement('li');
       li.className = 'todo-item' + (todo.done ? ' done' : '');
       li.dataset.id = todo.id;
       li.innerHTML = `
         <div class="todo-row">
+          <span class="sort-handle" title="드래그로 순서 변경">⠿</span>
           <div class="todo-check" data-id="${todo.id}" title="완료 토글">
             <svg width="13" height="10" viewBox="0 0 13 10" fill="none">
               <path d="M1 5L5 9L12 1" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -736,8 +826,24 @@
           <button class="memo-close-btn" data-id="${todo.id}" title="닫기">×</button>
         </div>
       `;
-      ul.appendChild(li);
+      frag.appendChild(li);
     });
+    ul.replaceChildren(frag);
+
+    // 수동 정렬 모드
+    ul.classList.toggle('manual-sort', currentSort === 'manual');
+    if (sortableInst) { sortableInst.destroy(); sortableInst = null; }
+    if (currentSort === 'manual') {
+      sortableInst = new Sortable(ul, {
+        handle: '.sort-handle',
+        animation: 150,
+        ghostClass: 'sortable-ghost',
+        onEnd() {
+          manualOrder = [...ul.querySelectorAll('.todo-item')].map(li => li.dataset.id);
+          localStorage.setItem(ORDER_KEY, JSON.stringify(manualOrder));
+        }
+      });
+    }
   }
 
   // ── 할 일 추가 ────────────────────────────────────────
@@ -761,6 +867,38 @@
     input.value = '';
     input.focus();
   }
+
+  // ── 키워드 자동 카테고리 분류 ────────────────────────
+  const AUTO_CAT = {
+    work: [
+      '회의','보고서','기획','미팅','업무','출장','발표','제안','계약','클라이언트',
+      '프로젝트','마감','이메일','메일','슬랙','코드','개발','버그','배포','리뷰',
+      '면접','채용','인수인계','야근','오피스','사무','팀','부서','상사','고객'
+    ],
+    study: [
+      '공부','강의','강좌','책','독서','학습','시험','과제','수업','튜토리얼',
+      '연습','복습','정리','노트','자격증','영어','일본어','수학','알고리즘',
+      '논문','리서치','조사','스터디','인강','유튜브 공부'
+    ],
+    personal: [
+      '운동','헬스','조깅','산책','청소','빨래','장보기','마트','요리','밥',
+      '병원','약','친구','가족','여행','영화','게임','취미','휴식','낮잠',
+      '생일','결혼','쇼핑','구매','주문','배달','택배','은행','납부'
+    ]
+  };
+
+  function detectCategory(text) {
+    const lower = text.toLowerCase();
+    for (const [cat, keywords] of Object.entries(AUTO_CAT)) {
+      if (keywords.some(kw => lower.includes(kw))) return cat;
+    }
+    return null;
+  }
+
+  document.getElementById('todo-input').addEventListener('input', e => {
+    const detected = detectCategory(e.target.value);
+    if (detected) document.getElementById('cat-select').value = detected;
+  });
 
   document.getElementById('add-btn').addEventListener('click', addTodo);
   document.getElementById('todo-input').addEventListener('keydown', e => { if (e.key === 'Enter') addTodo(); });
@@ -863,6 +1001,78 @@
   document.getElementById('trash-btn').addEventListener('click', () => {
     showTrash = !showTrash;
     renderTrash();
+  });
+
+  // ── 정렬 ─────────────────────────────────────────────
+  document.getElementById('sort-btns').addEventListener('click', e => {
+    const btn = e.target.closest('.sort-btn');
+    if (!btn) return;
+    currentSort = btn.dataset.sort;
+    localStorage.setItem(SORT_KEY, currentSort);
+    document.querySelectorAll('.sort-btn').forEach(b => b.classList.toggle('active', b === btn));
+    renderList();
+  });
+
+  // ── 내보내기 / 가져오기 ───────────────────────────────
+  function exportData() {
+    const data = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      todos:  todos.filter(t => !t.deletedAt).map(t => ({
+        id: t.id, text: t.text, category: t.category,
+        groupId: t.groupId, done: t.done,
+        createdAt: t.createdAt, memo: t.memo || ''
+      })),
+      groups: groups.map(g => ({ id: g.id, name: g.name, createdAt: g.createdAt }))
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `todos-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  document.getElementById('export-btn').addEventListener('click', exportData);
+
+  document.getElementById('import-file').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+
+    let data;
+    try {
+      data = JSON.parse(await file.text());
+      if (!Array.isArray(data.todos)) throw new Error();
+    } catch {
+      alert('올바른 JSON 파일이 아닙니다.'); return;
+    }
+
+    const backupFirst = confirm(
+      `가져오기 전에 현재 데이터를 백업하시겠습니까?\n(확인 → 백업 후 가져오기 / 취소 → 바로 가져오기)`
+    );
+    if (backupFirst) exportData();
+
+    if (!confirm(`총 ${data.todos.length}개 항목을 가져올까요?\n현재 데이터는 모두 교체됩니다.`)) return;
+
+    const batch = writeBatch(db);
+    todos.forEach(t => batch.delete(doc(db, 'todos', t.id)));
+    groups.filter(g => g.id !== 'default').forEach(g => batch.delete(doc(db, 'groups', g.id)));
+
+    (data.groups || []).filter(g => g.id !== 'default').forEach(g =>
+      batch.set(doc(db, 'groups', g.id), { name: g.name, createdAt: g.createdAt || new Date().toISOString() })
+    );
+    data.todos.forEach(t => {
+      const id = t.id || crypto.randomUUID();
+      batch.set(doc(db, 'todos', id), {
+        text: t.text || '', category: t.category || 'personal',
+        groupId: t.groupId || 'default', done: t.done || false,
+        createdAt: t.createdAt || new Date().toISOString(),
+        memo: t.memo || ''
+      });
+    });
+    await batch.commit();
+    alert('가져오기 완료!');
   });
 
   // ── 메모 저장 헬퍼 ───────────────────────────────────
