@@ -389,10 +389,28 @@
   </p>
 </div>
 
-<script>
+<script type="module">
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+  import {
+    getFirestore, collection, doc, setDoc, updateDoc, deleteDoc,
+    onSnapshot, writeBatch, getDocs
+  } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+  // ── Firebase 초기화 ───────────────────────────────────
+  const firebaseConfig = {
+    apiKey: "AIzaSyAtw0zmAdFlVnUvRNOFfUzgPosGfnV3veE",
+    authDomain: "todo-app-5b47e.firebaseapp.com",
+    projectId: "todo-app-5b47e",
+    storageBucket: "todo-app-5b47e.firebasestorage.app",
+    messagingSenderId: "667888863279",
+    appId: "1:667888863279:web:8f68bbc65e76ea1f229eda"
+  };
+  const fbApp  = initializeApp(firebaseConfig);
+  const db     = getFirestore(fbApp);
+  const todosCol  = collection(db, 'todos');
+  const groupsCol = collection(db, 'groups');
+
   // ── 상수 & 상태 ──────────────────────────────────────
-  const KEY_TODOS  = 'todo-app-data';
-  const KEY_GROUPS = 'todo-app-groups';
   const KEY_THEME  = 'todo-app-theme';
 
   let todos        = [];
@@ -400,39 +418,59 @@
   let currentGroup = 'default';
   let currentCat   = 'all';
   let searchQuery  = '';
+  let isEditing    = false;
 
-  const CAT_LABEL    = { work: '업무', personal: '개인', study: '공부' };
+  const CAT_LABEL     = { work: '업무', personal: '개인', study: '공부' };
   const DEFAULT_GROUP = { id: 'default', name: '기본' };
 
-  // ── 저장/로드 ─────────────────────────────────────────
-  function saveTodos()  { localStorage.setItem(KEY_TODOS,  JSON.stringify(todos)); }
-  function saveGroups() { localStorage.setItem(KEY_GROUPS, JSON.stringify(groups)); }
-
-  function load() {
-    try { todos = JSON.parse(localStorage.getItem(KEY_TODOS))  || []; } catch { todos  = []; }
-    try { groups = JSON.parse(localStorage.getItem(KEY_GROUPS)) || []; } catch { groups = []; }
-
-    // 마이그레이션: groupId 없는 기존 항목
-    todos.forEach(t => { if (!t.groupId) t.groupId = 'default'; });
-
-    // 기본 그룹 보장
-    if (!groups.find(g => g.id === 'default')) {
-      groups.unshift({ ...DEFAULT_GROUP });
-      saveGroups();
-    }
-
-    // 테마 복원
-    if (localStorage.getItem(KEY_THEME) === 'dark') {
-      document.body.classList.add('dark');
-      document.getElementById('theme-toggle').checked = true;
-    }
+  // ── 테마 (localStorage 유지) ──────────────────────────
+  if (localStorage.getItem(KEY_THEME) === 'dark') {
+    document.body.classList.add('dark');
+    document.getElementById('theme-toggle').checked = true;
   }
-
-  // ── 테마 ─────────────────────────────────────────────
   document.getElementById('theme-toggle').addEventListener('change', e => {
     document.body.classList.toggle('dark', e.target.checked);
     localStorage.setItem(KEY_THEME, e.target.checked ? 'dark' : 'light');
   });
+
+  // ── localStorage → Firestore 마이그레이션 ────────────
+  async function migrateIfNeeded() {
+    const localTodos = JSON.parse(localStorage.getItem('todo-app-data') || '[]');
+    if (!localTodos.length) return;
+    const snap = await getDocs(todosCol);
+    if (!snap.empty) { localStorage.removeItem('todo-app-data'); localStorage.removeItem('todo-app-groups'); return; }
+    const localGroups = JSON.parse(localStorage.getItem('todo-app-groups') || '[]');
+    const batch = writeBatch(db);
+    localTodos.forEach(t => batch.set(doc(db, 'todos', t.id), {
+      text: t.text, category: t.category, groupId: t.groupId || 'default',
+      done: t.done, createdAt: t.createdAt
+    }));
+    localGroups.filter(g => g.id !== 'default').forEach(g =>
+      batch.set(doc(db, 'groups', g.id), { name: g.name, createdAt: new Date().toISOString() })
+    );
+    await batch.commit();
+    localStorage.removeItem('todo-app-data');
+    localStorage.removeItem('todo-app-groups');
+  }
+
+  // ── Firestore 실시간 리스너 ───────────────────────────
+  function initListeners() {
+    onSnapshot(todosCol, snap => {
+      todos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (!isEditing) renderAll();
+    });
+    onSnapshot(groupsCol, snap => {
+      const loaded = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // 기본 그룹이 없으면 생성
+      if (!loaded.find(g => g.id === 'default'))
+        setDoc(doc(db, 'groups', 'default'), { name: '기본', createdAt: '0' });
+      groups = [
+        ...loaded.filter(g => g.id === 'default'),
+        ...loaded.filter(g => g.id !== 'default').sort((a,b) => (a.createdAt||'').localeCompare(b.createdAt||''))
+      ];
+      if (!isEditing) renderAll();
+    });
+  }
 
   // ── 렌더링 ───────────────────────────────────────────
   function renderAll() {
@@ -476,7 +514,10 @@
       function commit() {
         if (done) return; done = true;
         const name = inp.value.trim();
-        if (name) { groups.push({ id: crypto.randomUUID(), name }); saveGroups(); }
+        if (name) {
+          const id = crypto.randomUUID();
+          setDoc(doc(db, 'groups', id), { name, createdAt: new Date().toISOString() });
+        }
         renderGroups();
       }
       inp.addEventListener('keydown', e => {
@@ -497,10 +538,13 @@
       const grp = groups.find(g => g.id === gid);
       if (!grp) return;
       if (!confirm(`"${grp.name}" 그룹을 삭제할까요?\n해당 그룹의 할 일은 기본으로 이동됩니다.`)) return;
-      todos.forEach(t => { if (t.groupId === gid) t.groupId = 'default'; });
-      groups = groups.filter(g => g.id !== gid);
       if (currentGroup === gid) currentGroup = 'default';
-      saveTodos(); saveGroups(); renderAll();
+      const batch = writeBatch(db);
+      todos.filter(t => t.groupId === gid).forEach(t =>
+        batch.update(doc(db, 'todos', t.id), { groupId: 'default' })
+      );
+      batch.delete(doc(db, 'groups', gid));
+      batch.commit();
       return;
     }
     const pill = e.target.closest('.group-pill');
@@ -606,17 +650,16 @@
       setTimeout(() => { input.style.borderColor = ''; }, 600);
       return;
     }
-    todos.push({
-      id: crypto.randomUUID(), text,
+    const id = crypto.randomUUID();
+    setDoc(doc(db, 'todos', id), {
+      text,
       category:  document.getElementById('cat-select').value,
       groupId:   currentGroup,
       done:      false,
       createdAt: new Date().toISOString()
     });
-    saveTodos();
     input.value = '';
     input.focus();
-    renderAll();
   }
 
   document.getElementById('add-btn').addEventListener('click', addTodo);
@@ -631,12 +674,12 @@
 
   // 완료 항목 삭제
   document.getElementById('clear-btn').addEventListener('click', () => {
-    const count = todos.filter(t => t.groupId === currentGroup && t.done).length;
-    if (!count) return;
-    if (!confirm(`완료된 항목 ${count}개를 모두 삭제할까요?`)) return;
-    todos = todos.filter(t => !(t.groupId === currentGroup && t.done));
-    saveTodos();
-    renderAll();
+    const completed = todos.filter(t => t.groupId === currentGroup && t.done);
+    if (!completed.length) return;
+    if (!confirm(`완료된 항목 ${completed.length}개를 모두 삭제할까요?`)) return;
+    const batch = writeBatch(db);
+    completed.forEach(t => batch.delete(doc(db, 'todos', t.id)));
+    batch.commit();
   });
 
   // ── 목록 이벤트 위임 ─────────────────────────────────
@@ -644,17 +687,17 @@
     const check = e.target.closest('.todo-check');
     if (check) {
       const todo = todos.find(t => t.id === check.dataset.id);
-      if (todo) { todo.done = !todo.done; saveTodos(); renderAll(); }
+      if (todo) updateDoc(doc(db, 'todos', todo.id), { done: !todo.done });
       return;
     }
     const del = e.target.closest('.todo-delete');
     if (del) {
-      const li = document.querySelector(`.todo-item[data-id="${del.dataset.id}"]`);
+      const id = del.dataset.id;
+      const li = document.querySelector(`.todo-item[data-id="${id}"]`);
       if (!li) return;
       li.classList.add('removing');
       li.addEventListener('animationend', () => {
-        todos = todos.filter(t => t.id !== del.dataset.id);
-        saveTodos(); renderAll();
+        deleteDoc(doc(db, 'todos', id));
       }, { once: true });
     }
   });
@@ -693,16 +736,20 @@
     inp.focus(); inp.select();
 
     function commit() {
-      const t = inp.value.trim();
-      if (t) todo.text = t;
-      todo.category = catSel.value;
-      saveTodos(); renderAll();
+      isEditing = false;
+      const newText = inp.value.trim();
+      updateDoc(doc(db, 'todos', todo.id), {
+        text:     newText || todo.text,
+        category: catSel.value
+      });
+      renderAll();
     }
-    function cancel() { todo.text = origText; todo.category = origCat; renderAll(); }
+    function cancel() { isEditing = false; renderAll(); }
 
     let blurTimer = null;
     const onBlur  = () => { blurTimer = setTimeout(commit, 120); };
     const onFocus = () => clearTimeout(blurTimer);
+    isEditing = true;
     inp.addEventListener('blur',  onBlur);   catSel.addEventListener('blur',  onBlur);
     inp.addEventListener('focus', onFocus);  catSel.addEventListener('focus', onFocus);
 
@@ -766,9 +813,9 @@
   }
 
   // ── 초기화 ───────────────────────────────────────────
-  load();
   setDateDisplay();
-  renderAll();
+  await migrateIfNeeded();
+  initListeners();
 </script>
 </body>
 </html>
