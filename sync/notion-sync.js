@@ -87,7 +87,7 @@ async function main() {
 
   // ── Step 1: Firebase → Notion ─────────────────────────────────────────────
   for (const [fbId, todo] of fbMap) {
-    const groupName = groupById[todo.group]?.name ?? todo.group ?? '';
+    const groupName = groupById[todo.groupId]?.name ?? todo.groupId ?? '';
 
     if (!notionByFbId.has(fbId)) {
       // Firebase todo not in Notion yet → create
@@ -154,7 +154,7 @@ async function main() {
       text,
       done:      nCheck(page, '완료'),
       category:  TO_EN[catKo] ?? 'personal',
-      group,
+      groupId:   group,
       createdAt: now,
       updatedAt: now,
     });
