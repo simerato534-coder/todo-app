@@ -348,6 +348,63 @@
     }
     .sort-handle:active { cursor: grabbing; }
     .todo-list.manual-sort .sort-handle { display: block; }
+    .todo-item.dragging { opacity: 0.45; }
+
+    /* ── 달력 ── */
+    .calendar-card { padding: 16px 20px; margin-top: 12px; }
+    .cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .cal-title { font-size: 1rem; font-weight: 700; }
+    .cal-nav {
+      background: none; border: 1.5px solid var(--border); border-radius: 6px;
+      padding: 4px 10px; cursor: pointer; color: var(--text-sub);
+      font-size: 0.85rem; transition: all 0.15s;
+    }
+    .cal-nav:hover { border-color: var(--work); color: var(--work); }
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+    .cal-dow {
+      text-align: center; font-size: 0.7rem; font-weight: 700;
+      color: var(--text-muted); padding: 4px 0;
+    }
+    .cal-dow:first-child { color: #e74c3c; }
+    .cal-dow:last-child  { color: var(--work); }
+    .cal-day {
+      display: flex; flex-direction: column; align-items: center; gap: 3px;
+      padding: 5px 2px; border-radius: 8px; cursor: pointer;
+      min-height: 46px; transition: background 0.15s;
+    }
+    .cal-day:hover:not(.empty) { background: var(--bg); }
+    .cal-day.empty { cursor: default; }
+    .cal-day-num {
+      width: 26px; height: 26px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.82rem; font-weight: 500; color: var(--text);
+    }
+    .cal-day.today .cal-day-num { background: var(--work); color: #fff; font-weight: 700; }
+    .cal-day.selected:not(.today) .cal-day-num { background: var(--bg); border: 2px solid var(--work); }
+    .cal-day.sun .cal-day-num { color: #e74c3c; }
+    .cal-day.sat .cal-day-num { color: var(--work); }
+    .cal-day.today.sun .cal-day-num,
+    .cal-day.today.sat .cal-day-num { color: #fff; }
+    .cal-dots { display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; max-width: 36px; }
+    .cal-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+    .cal-dot.work     { background: var(--work); }
+    .cal-dot.personal { background: var(--personal); }
+    .cal-dot.study    { background: var(--study); }
+    .cal-day.drop-target { background: rgba(74,144,217,0.15); outline: 2px dashed var(--work); }
+    .cal-selected-panel { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .cal-selected-title { font-size: 0.85rem; font-weight: 700; color: var(--text-sub); margin-bottom: 8px; }
+    .cal-todo-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 0; border-bottom: 1px solid var(--border);
+    }
+    .cal-todo-item:last-child { border-bottom: none; }
+    .cal-todo-done-text { text-decoration: line-through; opacity: 0.55; }
+    .cal-empty-day { text-align: center; padding: 14px 0; color: var(--text-muted); font-size: 0.85rem; }
+    .due-date-badge {
+      font-size: 0.7rem; color: var(--work); background: rgba(74,144,217,0.12);
+      border-radius: 4px; padding: 1px 5px; white-space: nowrap;
+    }
+    .due-date-badge.overdue { color: var(--delete-color); background: rgba(231,76,60,0.1); }
 
     .todo-check {
       flex-shrink: 0; width: 22px; height: 22px;
@@ -400,6 +457,24 @@
       background: var(--card); border: 1px solid var(--border); border-radius: 3px;
       padding: 1px 5px; font-family: monospace; font-size: 0.7rem;
       transition: background-color 0.3s ease, border-color 0.3s ease;
+    }
+
+    /* ── 날짜 입력 ── */
+    .add-form input[type="date"] {
+      padding: 10px 12px; border: 1.5px solid var(--border); border-radius: 8px;
+      font-size: 0.88rem; background: var(--input-bg); color: var(--text);
+      cursor: pointer; outline: none;
+      transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+    }
+    .add-form input[type="date"]:focus { border-color: var(--work); }
+
+    /* ── 오늘 마감 강조 ── */
+    .todo-item.due-today { border: 2px solid var(--work); background: rgba(74,144,217,0.06); }
+    body.dark .todo-item.due-today { background: rgba(74,144,217,0.12); }
+    .due-today-badge {
+      font-size: 0.68rem; font-weight: 700; color: #fff;
+      background: var(--work); border-radius: 4px;
+      padding: 1px 6px; white-space: nowrap; flex-shrink: 0;
     }
   </style>
 </head>
@@ -466,6 +541,7 @@
         <option value="personal">🏠 개인</option>
         <option value="study">📚 공부</option>
       </select>
+      <input type="date" id="date-input" title="날짜 선택 (선택사항)">
       <button id="add-btn">추가</button>
     </div>
   </div>
@@ -520,6 +596,17 @@
     <kbd>Alt+1~4</kbd> 카테고리 전환 &nbsp;|&nbsp;
     텍스트 더블클릭으로 수정
   </p>
+
+  <!-- 달력 -->
+  <div class="card calendar-card">
+    <div class="cal-header">
+      <button class="cal-nav" id="cal-prev">◀</button>
+      <span class="cal-title" id="cal-title"></span>
+      <button class="cal-nav" id="cal-next">▶</button>
+    </div>
+    <div class="cal-grid" id="cal-grid"></div>
+    <div class="cal-selected-panel" id="cal-panel" style="display:none"></div>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
@@ -563,6 +650,16 @@
   const ORDER_KEY = 'todo-app-order';
   let currentSort = localStorage.getItem(SORT_KEY) || 'createdAt-desc';
   let manualOrder = JSON.parse(localStorage.getItem(ORDER_KEY) || '[]');
+
+  // 달력 상태
+  const todayYMD = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  })();
+  let calYear         = new Date().getFullYear();
+  let calMonth        = new Date().getMonth();
+  let selectedCalDate = null;
+  let draggedTodoId   = null;
 
   // 정렬 버튼 초기 상태
   document.querySelectorAll('.sort-btn').forEach(b =>
@@ -634,6 +731,8 @@
     renderActions();
     renderList();
     renderTrash();
+    renderCalendar();
+    renderCalPanel();
   }
 
   /* 그룹 바 */
@@ -784,7 +883,11 @@
         list.sort((a, b) => (b.createdAt||'').localeCompare(a.createdAt||''));
         list.sort((a, b) => a.done - b.done);
     }
-    return list;
+
+    // 오늘 마감 항목 맨 위로 (미완료만)
+    const dueToday = list.filter(t => !t.done && t.dueDate === todayYMD);
+    const rest     = list.filter(t => t.done || t.dueDate !== todayYMD);
+    return [...dueToday, ...rest];
   }
 
   function renderList() {
@@ -803,8 +906,22 @@
     const frag = document.createDocumentFragment();
     filtered.forEach(todo => {
       const li = document.createElement('li');
-      li.className = 'todo-item' + (todo.done ? ' done' : '');
+      const isDueToday = !todo.done && todo.dueDate === todayYMD;
+      li.className = 'todo-item' + (todo.done ? ' done' : '') + (isDueToday ? ' due-today' : '');
       li.dataset.id = todo.id;
+      li.draggable = true;
+
+      let dateBadge = '';
+      if (todo.dueDate) {
+        if (isDueToday) {
+          dateBadge = `<span class="due-today-badge">📅 오늘</span>`;
+        } else if (!todo.done && todo.dueDate < todayYMD) {
+          dateBadge = `<span class="due-date-badge overdue">⚠️ ${formatDueDate(todo.dueDate)}</span>`;
+        } else {
+          dateBadge = `<span class="due-date-badge">${formatDueDate(todo.dueDate)}</span>`;
+        }
+      }
+
       li.innerHTML = `
         <div class="todo-row">
           <span class="sort-handle" title="드래그로 순서 변경">⠿</span>
@@ -818,6 +935,7 @@
             <span class="todo-text" data-id="${todo.id}" title="더블클릭으로 수정">${escapeHtml(todo.text)}</span>
             <span class="todo-time">${timeAgo(todo.createdAt)}</span>
           </div>
+          ${dateBadge}
           <button class="memo-btn${todo.memo ? ' has-memo' : ''}${todo.id === openMemoId ? ' memo-open' : ''}" data-id="${todo.id}">메모</button>
           <button class="todo-delete" data-id="${todo.id}" title="삭제">×</button>
         </div>
@@ -826,6 +944,19 @@
           <button class="memo-close-btn" data-id="${todo.id}" title="닫기">×</button>
         </div>
       `;
+
+      li.addEventListener('dragstart', e => {
+        if (e.target.closest('.sort-handle')) return;
+        draggedTodoId = todo.id;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', todo.id);
+        setTimeout(() => li.classList.add('dragging'), 0);
+      });
+      li.addEventListener('dragend', () => {
+        li.classList.remove('dragging');
+        draggedTodoId = null;
+      });
+
       frag.appendChild(li);
     });
     ul.replaceChildren(frag);
@@ -856,15 +987,19 @@
       setTimeout(() => { input.style.borderColor = ''; }, 600);
       return;
     }
-    const id = crypto.randomUUID();
-    setDoc(doc(db, 'todos', id), {
+    const dateVal  = document.getElementById('date-input').value;
+    const id       = crypto.randomUUID();
+    const todoData = {
       text,
       category:  document.getElementById('cat-select').value,
       groupId:   currentGroup,
       done:      false,
       createdAt: new Date().toISOString()
-    });
+    };
+    if (dateVal) todoData.dueDate = dateVal;
+    setDoc(doc(db, 'todos', id), todoData);
     input.value = '';
+    document.getElementById('date-input').value = '';
     input.focus();
   }
 
@@ -1257,12 +1392,158 @@
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  function formatDueDate(dateStr) {
+    if (!dateStr) return '';
+    const [, m, d] = dateStr.split('-');
+    return `${Number(m)}/${Number(d)}`;
+  }
+
+  // ── 달력 렌더링 ───────────────────────────────────────
+  function renderCalendar() {
+    const titleEl = document.getElementById('cal-title');
+    const gridEl  = document.getElementById('cal-grid');
+    if (!titleEl || !gridEl) return;
+
+    titleEl.textContent = `${calYear}년 ${calMonth + 1}월`;
+
+    const frag = document.createDocumentFragment();
+    ['일','월','화','수','목','금','토'].forEach(dow => {
+      const cell = document.createElement('div');
+      cell.className = 'cal-dow';
+      cell.textContent = dow;
+      frag.appendChild(cell);
+    });
+
+    const firstDow    = new Date(calYear, calMonth, 1).getDay();
+    const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+
+    const todosByDate = {};
+    todos.filter(t => t.dueDate && !t.deletedAt).forEach(t => {
+      (todosByDate[t.dueDate] ||= []).push(t);
+    });
+
+    for (let i = 0; i < firstDow; i++) {
+      const cell = document.createElement('div');
+      cell.className = 'cal-day empty';
+      frag.appendChild(cell);
+    }
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const mm      = String(calMonth + 1).padStart(2, '0');
+      const dd      = String(d).padStart(2, '0');
+      const dateStr = `${calYear}-${mm}-${dd}`;
+      const dow     = new Date(calYear, calMonth, d).getDay();
+      const dayTodos = todosByDate[dateStr] || [];
+      const isToday  = dateStr === todayYMD;
+      const isSel    = dateStr === selectedCalDate;
+
+      const cell = document.createElement('div');
+      let cls = 'cal-day';
+      if (isToday)   cls += ' today';
+      if (isSel)     cls += ' selected';
+      if (dow === 0) cls += ' sun';
+      if (dow === 6) cls += ' sat';
+      cell.className    = cls;
+      cell.dataset.date = dateStr;
+
+      const numEl = document.createElement('div');
+      numEl.className = 'cal-day-num';
+      numEl.textContent = d;
+      cell.appendChild(numEl);
+
+      if (dayTodos.length) {
+        const dotsEl = document.createElement('div');
+        dotsEl.className = 'cal-dots';
+        dayTodos.slice(0, 5).forEach(t => {
+          const dot = document.createElement('div');
+          dot.className = `cal-dot ${t.category}`;
+          dotsEl.appendChild(dot);
+        });
+        cell.appendChild(dotsEl);
+      }
+
+      cell.addEventListener('dragover', e => {
+        if (!draggedTodoId) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        cell.classList.add('drop-target');
+      });
+      cell.addEventListener('dragleave', e => {
+        if (!cell.contains(e.relatedTarget)) cell.classList.remove('drop-target');
+      });
+      cell.addEventListener('drop', e => {
+        e.preventDefault();
+        cell.classList.remove('drop-target');
+        if (draggedTodoId) {
+          updateDoc(doc(db, 'todos', draggedTodoId), { dueDate: dateStr });
+          draggedTodoId = null;
+        }
+      });
+      cell.addEventListener('click', () => {
+        selectedCalDate = selectedCalDate === dateStr ? null : dateStr;
+        renderCalendar();
+        renderCalPanel();
+      });
+
+      frag.appendChild(cell);
+    }
+
+    gridEl.replaceChildren(frag);
+  }
+
+  function renderCalPanel() {
+    const panel = document.getElementById('cal-panel');
+    if (!panel) return;
+    if (!selectedCalDate) { panel.style.display = 'none'; return; }
+
+    const [, m, d] = selectedCalDate.split('-').map(Number);
+    const dayTodos = todos.filter(t => t.dueDate === selectedCalDate && !t.deletedAt);
+    panel.style.display = 'block';
+
+    const title = document.createElement('div');
+    title.className = 'cal-selected-title';
+    title.textContent = `${m}월 ${d}일 일정 (${dayTodos.length}개)`;
+    panel.replaceChildren(title);
+
+    if (!dayTodos.length) {
+      const empty = document.createElement('div');
+      empty.className = 'cal-empty-day';
+      empty.textContent = '이 날 일정이 없어요';
+      panel.appendChild(empty);
+      return;
+    }
+
+    dayTodos.forEach(t => {
+      const item = document.createElement('div');
+      item.className = 'cal-todo-item';
+      item.innerHTML = `
+        <span class="cat-badge ${t.category}">${CAT_LABEL[t.category]}</span>
+        <span class="${t.done ? 'cal-todo-done-text' : ''}" style="flex:1;font-size:0.9rem">${escapeHtml(t.text)}</span>
+      `;
+      panel.appendChild(item);
+    });
+  }
+
   function setDateDisplay() {
     const d = new Date();
     const days = ['일','월','화','수','목','금','토'];
     document.getElementById('date-display').textContent =
       `${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일 (${days[d.getDay()]}요일)`;
   }
+
+  // ── 달력 네비게이션 ───────────────────────────────────
+  document.getElementById('cal-prev').addEventListener('click', () => {
+    if (--calMonth < 0) { calMonth = 11; calYear--; }
+    selectedCalDate = null;
+    renderCalendar();
+    renderCalPanel();
+  });
+  document.getElementById('cal-next').addEventListener('click', () => {
+    if (++calMonth > 11) { calMonth = 0; calYear++; }
+    selectedCalDate = null;
+    renderCalendar();
+    renderCalPanel();
+  });
 
   // ── 초기화 ───────────────────────────────────────────
   setDateDisplay();
