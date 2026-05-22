@@ -87,6 +87,9 @@ async function main() {
 
   // ── Step 1: Firebase → Notion ─────────────────────────────────────────────
   for (const [fbId, todo] of fbMap) {
+    // 휴지통 항목은 동기화 제외 (Step 3에서 Notion 페이지 보관 처리)
+    if (todo.deletedAt) continue;
+
     const groupName = groupById[todo.groupId]?.name ?? todo.groupId ?? '';
 
     if (!notionByFbId.has(fbId)) {
@@ -169,11 +172,12 @@ async function main() {
     console.log(`[+Firebase] ${ref.id} "${text}" (from Notion)`);
   }
 
-  // ── Step 3: Firebase 삭제 → Notion 보관 ──────────────────────────────────
+  // ── Step 3: Firebase 삭제/휴지통 → Notion 보관 ──────────────────────────────
   for (const [fbId, page] of notionByFbId) {
-    if (!fbMap.has(fbId)) {
+    const todo = fbMap.get(fbId);
+    if (!todo || todo.deletedAt) {
       await notion.pages.update({ page_id: page.id, archived: true });
-      console.log(`[-Notion] ${fbId} (Firebase deleted)`);
+      console.log(`[-Notion] ${fbId} (${!todo ? 'deleted' : 'in trash'})`);
     }
   }
 

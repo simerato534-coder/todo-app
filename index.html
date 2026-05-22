@@ -349,6 +349,9 @@
     .sort-handle:active { cursor: grabbing; }
     .todo-list.manual-sort .sort-handle { display: block; }
     .todo-item.dragging { opacity: 0.45; }
+    .cal-todo-item[draggable="true"] { cursor: grab; }
+    .cal-todo-item[draggable="true"]:active { cursor: grabbing; }
+    .cal-todo-item.dragging { opacity: 0.45; }
 
     /* ── 달력 ── */
     .calendar-card { padding: 16px 20px; margin-top: 12px; }
@@ -1031,8 +1034,11 @@
   }
 
   document.getElementById('todo-input').addEventListener('input', e => {
-    const detected = detectCategory(e.target.value);
-    if (detected) document.getElementById('cat-select').value = detected;
+    const val = e.target.value;
+    const detectedCat  = detectCategory(val);
+    if (detectedCat) document.getElementById('cat-select').value = detectedCat;
+    const detectedDate = detectDate(val);
+    if (detectedDate) document.getElementById('date-input').value = detectedDate;
   });
 
   document.getElementById('add-btn').addEventListener('click', addTodo);
@@ -1398,6 +1404,27 @@
     return `${Number(m)}/${Number(d)}`;
   }
 
+  function fmtYMD(d) {
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+
+  function detectDate(text) {
+    const now = new Date();
+    if (/오늘/.test(text)) return todayYMD;
+    if (/내일/.test(text)) { const d = new Date(now); d.setDate(d.getDate()+1); return fmtYMD(d); }
+    if (/모레/.test(text)) { const d = new Date(now); d.setDate(d.getDate()+2); return fmtYMD(d); }
+    const dl = text.match(/(\d+)일\s*(?:후|뒤)/);
+    if (dl) { const d = new Date(now); d.setDate(d.getDate()+Number(dl[1])); return fmtYMD(d); }
+    const md = text.match(/(\d{1,2})월\s*(\d{1,2})일/);
+    if (md) {
+      const m = String(md[1]).padStart(2,'0'), dd = String(md[2]).padStart(2,'0');
+      const y = now.getFullYear();
+      const s = `${y}-${m}-${dd}`;
+      return s < todayYMD ? `${y+1}-${m}-${dd}` : s;
+    }
+    return null;
+  }
+
   // ── 달력 렌더링 ───────────────────────────────────────
   function renderCalendar() {
     const titleEl = document.getElementById('cal-title');
@@ -1516,10 +1543,22 @@
     dayTodos.forEach(t => {
       const item = document.createElement('div');
       item.className = 'cal-todo-item';
+      item.draggable = true;
       item.innerHTML = `
         <span class="cat-badge ${t.category}">${CAT_LABEL[t.category]}</span>
         <span class="${t.done ? 'cal-todo-done-text' : ''}" style="flex:1;font-size:0.9rem">${escapeHtml(t.text)}</span>
+        <span style="font-size:0.7rem;color:var(--text-muted);margin-left:4px" title="다른 날로 드래그해서 이동">⠿</span>
       `;
+      item.addEventListener('dragstart', e => {
+        draggedTodoId = t.id;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', t.id);
+        setTimeout(() => item.classList.add('dragging'), 0);
+      });
+      item.addEventListener('dragend', () => {
+        item.classList.remove('dragging');
+        draggedTodoId = null;
+      });
       panel.appendChild(item);
     });
   }
