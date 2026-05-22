@@ -1409,19 +1409,69 @@
   }
 
   function detectDate(text) {
-    const now = new Date();
+    const now    = new Date();
+    const todDow = now.getDay(); // 0=일, 1=월 ... 6=토
+    const DOW_KO = { '일':0, '월':1, '화':2, '수':3, '목':4, '금':5, '토':6 };
+    const KO_NUM = { '한':1, '두':2, '세':3, '네':4, '다섯':5, '여섯':6 };
+
+    const addDays   = n => { const d = new Date(now); d.setDate(d.getDate()+n); return fmtYMD(d); };
+    const addMonths = n => { const d = new Date(now); d.setMonth(d.getMonth()+n); return fmtYMD(d); };
+    // 오늘 기준으로 해당 요일까지 최소 1일, 최대 7일
+    const daysUntil = dow => ((dow - todDow + 7) % 7) || 7;
+    // 다음주 특정 요일 (다음주 월요일부터 계산)
+    const nextWeekDate = dow => {
+      const toMon = ((1 - todDow + 7) % 7) || 7; // 다음 월요일까지 일수
+      const offset = dow === 0 ? 6 : dow - 1;     // 월=0, 화=1 ... 일=6
+      return addDays(toMon + offset);
+    };
+
     if (/오늘/.test(text)) return todayYMD;
-    if (/내일/.test(text)) { const d = new Date(now); d.setDate(d.getDate()+1); return fmtYMD(d); }
-    if (/모레/.test(text)) { const d = new Date(now); d.setDate(d.getDate()+2); return fmtYMD(d); }
-    const dl = text.match(/(\d+)일\s*(?:후|뒤)/);
-    if (dl) { const d = new Date(now); d.setDate(d.getDate()+Number(dl[1])); return fmtYMD(d); }
-    const md = text.match(/(\d{1,2})월\s*(\d{1,2})일/);
-    if (md) {
-      const m = String(md[1]).padStart(2,'0'), dd = String(md[2]).padStart(2,'0');
-      const y = now.getFullYear();
-      const s = `${y}-${m}-${dd}`;
-      return s < todayYMD ? `${y+1}-${m}-${dd}` : s;
+    if (/내일/.test(text)) return addDays(1);
+    if (/모레/.test(text)) return addDays(2);
+
+    // 다음 주말 (주말 앞에 체크)
+    if (/다음\s*주말/.test(text)) return nextWeekDate(6);
+    // 이번 주말 / 주말
+    if (/주말/.test(text)) return addDays(daysUntil(6));
+
+    // 다음주 + 요일 (예: 다음주 금요일, 다음 월요일)
+    let m = text.match(/다음\s*주?\s*([월화수목금토일])요일?/);
+    if (m) return nextWeekDate(DOW_KO[m[1]]);
+
+    // 이번주 + 요일 / 요일만 (예: 이번주 수요일, 금요일)
+    m = text.match(/(?:이번\s*주?\s*)?([월화수목금토일])요일/);
+    if (m) return addDays(daysUntil(DOW_KO[m[1]]));
+
+    // 다음주 (요일 미지정 → 다음 월요일)
+    if (/다음\s*주/.test(text)) return nextWeekDate(1);
+
+    // 다음달 N일
+    m = text.match(/다음\s*달\s*(\d{1,2})일/);
+    if (m) { const d = new Date(now); d.setMonth(d.getMonth()+1, Number(m[1])); return fmtYMD(d); }
+    // 다음달
+    if (/다음\s*달/.test(text)) return addMonths(1);
+
+    // N주 후/뒤 (예: 2주 후, 한주 뒤)
+    m = text.match(/(\d+|한|두|세|네)\s*주\s*(?:후|뒤)/);
+    if (m) return addDays((KO_NUM[m[1]] ?? Number(m[1])) * 7);
+
+    // N달/개월 후/뒤 (예: 한달 뒤, 2개월 후)
+    m = text.match(/(\d+|한|두|세|네)\s*(?:달|개월)\s*(?:후|뒤)/);
+    if (m) return addMonths(KO_NUM[m[1]] ?? Number(m[1]));
+
+    // N일 후/뒤
+    m = text.match(/(\d+)\s*일\s*(?:후|뒤)/);
+    if (m) return addDays(Number(m[1]));
+
+    // N월 N일
+    m = text.match(/(\d{1,2})월\s*(\d{1,2})일/);
+    if (m) {
+      const mo = String(m[1]).padStart(2,'0'), dy = String(m[2]).padStart(2,'0');
+      const y  = now.getFullYear();
+      const s  = `${y}-${mo}-${dy}`;
+      return s < todayYMD ? `${y+1}-${mo}-${dy}` : s;
     }
+
     return null;
   }
 
