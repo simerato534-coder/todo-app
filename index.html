@@ -477,7 +477,22 @@
     .due-today-badge {
       font-size: 0.68rem; font-weight: 700; color: #fff;
       background: var(--work); border-radius: 4px;
-      padding: 1px 6px; white-space: nowrap; flex-shrink: 0;
+      padding: 1px 6px; white-space: nowrap; flex-shrink: 0; cursor: pointer;
+    }
+    .due-date-badge { cursor: pointer; }
+    .set-date-btn {
+      font-size: 0.82rem; cursor: pointer; opacity: 0.3; flex-shrink: 0;
+      padding: 1px 4px; border-radius: 4px; transition: opacity 0.15s;
+      line-height: 1.4;
+    }
+    .set-date-btn:hover { opacity: 0.8; }
+
+    /* ── 터치 드래그 고스트 ── */
+    .touch-ghost {
+      position: fixed; pointer-events: none; z-index: 9999;
+      opacity: 0.75; border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+      transform: scale(1.03); transition: none;
     }
   </style>
 </head>
@@ -663,6 +678,13 @@
   let calMonth        = new Date().getMonth();
   let selectedCalDate = null;
   let draggedTodoId   = null;
+
+  // 터치 드래그 상태
+  let touchDragId     = null;
+  let touchGhost      = null;
+  let touchOriginEl   = null;
+  let touchDragActive = false;
+  let touchHoldTimer  = null;
 
   // 정렬 버튼 초기 상태
   document.querySelectorAll('.sort-btn').forEach(b =>
@@ -917,12 +939,14 @@
       let dateBadge = '';
       if (todo.dueDate) {
         if (isDueToday) {
-          dateBadge = `<span class="due-today-badge">📅 오늘</span>`;
+          dateBadge = `<span class="due-today-badge" data-date-pick="${todo.id}" title="탭하여 날짜 변경">📅 오늘</span>`;
         } else if (!todo.done && todo.dueDate < todayYMD) {
-          dateBadge = `<span class="due-date-badge overdue">⚠️ ${formatDueDate(todo.dueDate)}</span>`;
+          dateBadge = `<span class="due-date-badge overdue" data-date-pick="${todo.id}" title="탭하여 날짜 변경">⚠️ ${formatDueDate(todo.dueDate)}</span>`;
         } else {
-          dateBadge = `<span class="due-date-badge">${formatDueDate(todo.dueDate)}</span>`;
+          dateBadge = `<span class="due-date-badge" data-date-pick="${todo.id}" title="탭하여 날짜 변경">${formatDueDate(todo.dueDate)}</span>`;
         }
+      } else {
+        dateBadge = `<span class="set-date-btn" data-date-pick="${todo.id}" title="날짜 설정">📅</span>`;
       }
 
       li.innerHTML = `
@@ -959,6 +983,7 @@
         li.classList.remove('dragging');
         draggedTodoId = null;
       });
+      setupTouchDrag(li, todo.id, '.sort-handle,.memo-btn,.todo-delete,.todo-check,.memo-close-btn,[data-date-pick]');
 
       frag.appendChild(li);
     });
@@ -1266,6 +1291,14 @@
     const memoClose = e.target.closest('.memo-close-btn');
     if (memoClose) {
       closeMemo(memoClose.closest('.todo-item'));
+      return;
+    }
+
+    const datePick = e.target.closest('[data-date-pick]');
+    if (datePick) {
+      const id   = datePick.dataset.datePick;
+      const todo = todos.find(t => t.id === id);
+      if (todo) showDatePicker(id, todo.dueDate);
       return;
     }
 
@@ -1609,6 +1642,7 @@
         item.classList.remove('dragging');
         draggedTodoId = null;
       });
+      setupTouchDrag(item, t.id, '');
       panel.appendChild(item);
     });
   }
@@ -1618,6 +1652,98 @@
     const days = ['일','월','화','수','목','금','토'];
     document.getElementById('date-display').textContent =
       `${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일 (${days[d.getDay()]}요일)`;
+  }
+
+  // ── 날짜 픽커 (탭으로 날짜 변경) ────────────────────────
+  function showDatePicker(todoId, currentDate) {
+    const inp = document.createElement('input');
+    inp.type  = 'date';
+    inp.value = currentDate || '';
+    inp.style.cssText = 'position:fixed;opacity:0;top:0;left:0;width:0;height:0;';
+    document.body.appendChild(inp);
+    try { inp.showPicker(); } catch { inp.focus(); }
+    inp.addEventListener('change', () => {
+      updateDoc(doc(db, 'todos', todoId), { dueDate: inp.value || null });
+    });
+    inp.addEventListener('blur', () => setTimeout(() => inp.remove(), 200));
+  }
+
+  // ── 터치 드래그 앤 드롭 ───────────────────────────────
+  function setupTouchDrag(el, todoId, skipSelector) {
+    let startX, startY;
+
+    el.addEventListener('touchstart', e => {
+      if (skipSelector && e.target.closest(skipSelector)) return;
+      const touch = e.touches[0];
+      startX = touch.clientX;
+      startY = touch.clientY;
+
+      touchHoldTimer = setTimeout(() => {
+        touchDragActive = true;
+        touchDragId     = todoId;
+        touchOriginEl   = el;
+        if (navigator.vibrate) navigator.vibrate(50);
+
+        const rect = el.getBoundingClientRect();
+        touchGhost = el.cloneNode(true);
+        touchGhost.className += ' touch-ghost';
+        touchGhost.style.left  = rect.left + 'px';
+        touchGhost.style.top   = rect.top  + 'px';
+        touchGhost.style.width = rect.width + 'px';
+        document.body.appendChild(touchGhost);
+        el.style.opacity = '0.35';
+      }, 420);
+    }, { passive: true });
+
+    el.addEventListener('touchmove', e => {
+      if (!touchDragActive) {
+        const t = e.touches[0];
+        if (Math.abs(t.clientX - startX) > 8 || Math.abs(t.clientY - startY) > 8) {
+          clearTimeout(touchHoldTimer);
+        }
+        return;
+      }
+      e.preventDefault();
+
+      const touch = e.touches[0];
+      const gw = touchGhost.offsetWidth;
+      const gh = touchGhost.offsetHeight;
+      touchGhost.style.left = (touch.clientX - gw / 2) + 'px';
+      touchGhost.style.top  = (touch.clientY - gh / 2) + 'px';
+
+      // 드롭 타겟 감지
+      touchGhost.style.visibility = 'hidden';
+      const under = document.elementFromPoint(touch.clientX, touch.clientY);
+      touchGhost.style.visibility = '';
+
+      document.querySelectorAll('.cal-day.drop-target').forEach(c => c.classList.remove('drop-target'));
+      const calDay = under?.closest('.cal-day');
+      if (calDay && !calDay.classList.contains('empty')) calDay.classList.add('drop-target');
+    }, { passive: false });
+
+    const endDrag = e => {
+      clearTimeout(touchHoldTimer);
+      if (!touchDragActive) return;
+
+      const touch = (e.changedTouches || e.touches)[0];
+      if (touchGhost)    { touchGhost.remove(); touchGhost = null; }
+      if (touchOriginEl) { touchOriginEl.style.opacity = ''; touchOriginEl = null; }
+      document.querySelectorAll('.cal-day.drop-target').forEach(c => c.classList.remove('drop-target'));
+
+      if (touch) {
+        const under  = document.elementFromPoint(touch.clientX, touch.clientY);
+        const calDay = under?.closest('.cal-day');
+        if (calDay && !calDay.classList.contains('empty') && calDay.dataset.date) {
+          updateDoc(doc(db, 'todos', touchDragId), { dueDate: calDay.dataset.date });
+        }
+      }
+
+      touchDragActive = false;
+      touchDragId     = null;
+    };
+
+    el.addEventListener('touchend',    endDrag);
+    el.addEventListener('touchcancel', endDrag);
   }
 
   // ── 달력 네비게이션 ───────────────────────────────────
